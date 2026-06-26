@@ -70,6 +70,89 @@ def inbound_cabin_move():
     print(f"✅ [CABIN MOVE SUCCESS]: Relocated Guest ID {guest_id} cleanly to Cabin extension slot {new_cabin}.")
     return make_xml_response("cabinMove", "OK")
 
+# --- SPEC 2A: Inbound Real-Time Guest Check-In ---
+# Triggered by Callisto shoreside scripts or automated terminal postings
+@app.route('/rest/checkIn.asp', methods=['POST'])
+@app.route('/API/checkIn', methods=['POST'])  # Fallback unified routing target
+def inbound_guest_checkin():
+    """
+    Listens for real-time check-in updates or profile overwrites pushed by Callisto.
+    Validates mandatory parameters and locks them into our active memory registry.
+    """
+    guest_id = request.form.get('guestID')
+    first_name = request.form.get('firstName')
+    last_name = request.form.get('lastName')
+    cabin_number = request.form.get('cabinNumber')
+    check_in_date = request.form.get('checkInDate')
+    check_out_date = request.form.get('checkOutDate')
+    language = request.form.get('language')
+    
+    # Optional parameters from the documentation layout spec
+    greeting = request.form.get('greeting', 'Mr')
+    main_guest = request.form.get('mainGuest', '1')
+    pax_type = request.form.get('type', 'P')
+    voyage_id = request.form.get('voyageID', VALID_SHIP_CODE)
+    enabled = request.form.get('enabled', '1')
+
+    # --- STRICT MANDATORY PARAMETER VALIDATION PASS ---
+    if not all([guest_id, first_name, last_name, cabin_number, check_in_date, check_out_date, language]):
+        print("❌ [CHECK-IN REJECT]: Callisto pushed a check-in payload missing mandatory properties.")
+        return make_xml_response("checkIn", "PARAMETER_MISSING")
+
+    # Construct the incoming profile payload format dictionary
+    passenger_payload = {
+        "guestID": guest_id,
+        "firstName": first_name,
+        "lastName": last_name,
+        "cabinNumber": cabin_number,
+        "checkInDate": check_in_date,
+        "checkOutDate": check_out_date,
+        "language": language,
+        "greeting": greeting,
+        "mainGuest": main_guest,
+        "type": pax_type,
+        "voyageID": voyage_id,
+        "enabled": enabled
+    }
+
+    # Atomically upsert (update or insert) into our memory database list array
+    global mock_passengers
+    mock_passengers = [x for x in mock_passengers if x["guestID"] != guest_id]
+    mock_passengers.append(passenger_payload)
+
+    print(f"📥 [REAL-TIME CHECK-IN]: Successfully registered {first_name} {last_name} into Cabin {cabin_number} (ID: {guest_id}).")
+    return make_xml_response("checkIn", "OK")
+
+
+# --- SPEC 2B: Inbound Real-Time Guest Check-Out ---
+@app.route('/rest/checkOut.asp', methods=['POST'])
+@app.route('/API/checkOut', methods=['POST'])
+def inbound_guest_checkout():
+    """
+    Listens for real-time checkout signals pushed by Callisto.
+    Purges the active index profile out of the mock database matrix.
+    """
+    guest_id = request.form.get('guestID') or request.form.get('guestId')
+    
+    if not guest_id:
+        print("❌ [CHECK-OUT REJECT]: Callisto dropped a checkout request without providing a guestID.")
+        return make_xml_response("checkOut", "PARAMETER_MISSING")
+
+    # Verify if the target user actually resides in our active warehouse array
+    global mock_passengers
+    target_match = next((x for x in mock_passengers if x["guestID"] == guest_id), None)
+    
+    if not target_match:
+        print(f"⚠️  [CHECK-OUT WARNING]: Callisto requested checkout for unknown/expired ID: {guest_id}")
+        return make_xml_response("checkOut", "NOT_FOUND")
+
+    # Purge the passenger out of our mock manifest dictionary array loop
+    mock_passengers = [x for x in mock_passengers if x["guestID"] != guest_id]
+    
+    print(f"🏃 [REAL-TIME CHECK-OUT]: Processed complete checkout lifecycle for Guest ID {guest_id} out of Cabin {target_match['cabinNumber']}.")
+    return make_xml_response("checkOut", "OK")
+
+
 # --- SPEC 3: Disable Phone External Call Routing Lines ---
 @app.route('/rest/disablePhone.asp', methods=['POST'])
 @app.route('/API/disablePhone', methods=['POST'])
